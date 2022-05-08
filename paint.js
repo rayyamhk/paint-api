@@ -1,7 +1,13 @@
 class Paint {
+  #width;
+  #height;
   #bbox;
   #ctx;
+  #drawBackground = () => {};
   #cleanUp = () => {};
+
+  #checkpoints = [];
+  #activeCheckpoint = -1;
 
   // initial mousedown position
   #x;
@@ -25,6 +31,8 @@ class Paint {
 
   constructor(canvas, width, height) {
     const dpr = window && window.devicePixelRatio || 1;
+    this.#width = width;
+    this.#height = height;
     canvas.style.width = width + 'px';
     canvas.style.height = height + 'px';
     canvas.width = width * dpr;
@@ -59,12 +67,71 @@ class Paint {
     this.#dispatch('onclear');
   }
 
-  checkpoint() {}
+  checkpoint() {
+    const canvas = this.#ctx.canvas;
+    const offscreenCanvas = canvas.cloneNode();
+    const offscreenCtx = offscreenCanvas.getContext('2d');
+    offscreenCtx.drawImage(canvas, 0, 0);
+    this.#checkpoints.push(offscreenCanvas);
+    this.#activeCheckpoint = this.#checkpoints.length - 1;
+    this.#hideBoundingBox();
+    this.#history.reset();
+    this.#dispatch('oncheckpoint', { checkpoint: this.#activeCheckpoint });
+  }
+
+  loadCheckpoint(i) {
+    if (this.#checkpoints[i]) {
+      this.#activeCheckpoint = i;
+      this.#history.reset();
+      this.#repaint();
+      this.#hideBoundingBox();
+      this.#dispatch('oncheckpointload', { checkpoint: i });
+    }
+  }
 
   save() {}
 
-  get state() {
-    return this.#history.history;
+  background(type, content) {
+    if (type === 'fill') {
+      this.#drawBackground = () => {
+        this.#ctx.fillStyle = content;
+        this.#ctx.fillRect(0, 0, this.#ctx.canvas.width, this.#ctx.canvas.height);
+        this.#ctx.fillStyle = '#000'; // reset
+      };
+    } else if (type === 'image') {
+      this.#drawBackground = () => {
+        this.#ctx.drawImage(content, 0, 0, this.#ctx.canvas.width, this.#ctx.canvas.height);
+      };
+    }
+    this.#drawBackground();
+  }
+
+  loadImage(image, width, height) {
+    const state = {
+      source: image,
+      centerX: this.#width * 0.5,
+      centerY: this.#height * 0.5,
+      width,
+      height,
+      rotate: 0,
+    }
+    this.#history.push({
+      id: this.#getId(),
+      type: CONSTANT.IMAGE,
+      state,
+    });
+
+    const handler = (e) => {
+      e.preventDefault();
+      this.#hideBoundingBox();
+    };
+
+    this.#cleanUp();
+    this.#showBoundingBox(state);
+    this.#ctx.canvas.addEventListener('mousedown', handler);
+    window.requestAnimationFrame(() => this.#repaint());
+    this.#dispatch('onimageload', deepClone(this.#history.at(-1)))
+    this.#cleanUp = () => this.#ctx.canvas.removeEventListener('mousedown', handler);
   }
 
   // Geometries
@@ -206,7 +273,7 @@ class Paint {
         this.#painting = false;
         this.#dispatch('onpaintend', deepClone(this.#history.at(-1)));
       }
-    }
+    };
 
     this.#cleanUp();
     this.#hideBoundingBox();
@@ -291,6 +358,11 @@ class Paint {
 
   #repaint() {
     this.#ctx.clearRect(0, 0, this.#ctx.canvas.width, this.#ctx.canvas.height);
+    if (this.#activeCheckpoint >= 0) {
+      this.#ctx.drawImage(this.#checkpoints[this.#activeCheckpoint], 0, 0);
+    } else {
+      this.#drawBackground();
+    }
     this.#history.forEach(({ id, type, state }, i) => {
       const nextAction = this.#history.at(i + 1);
       if (nextAction && id === nextAction.id) {
@@ -309,6 +381,8 @@ class Paint {
         this.#drawTriangle(state);
       } else if (type === CONSTANT.LINE) {
         this.#drawLine(state);
+      } else if (type === CONSTANT.IMAGE) {
+        this.#drawImage(state);
       }
     });
   }
@@ -390,6 +464,17 @@ class Paint {
     this.#ctx.restore();
   }
 
+  #drawImage({ source, centerX, centerY, width, height, rotate }) {
+    if (this.#resizing || this.#rotating || this.#dragging) {
+      this.#showBoundingBox({ centerX, centerY, width, height, rotate });
+    }
+    this.#ctx.save();
+    this.#ctx.translate(centerX, centerY);
+    this.#ctx.rotate(rotate);
+    this.#ctx.drawImage(source, -width * 0.5, -height * 0.5, width, height);
+    this.#ctx.restore();
+  }
+
   #showBoundingBox({ centerX: cx, centerY: cy, width: w, height: h, rotate: r }) {
     w = Math.abs(w);
     h = Math.abs(h);
@@ -412,8 +497,8 @@ class Paint {
     this.#bbox.style.transform = 'translate(-9999px, -9999px)';
   }
 
-  #initDOM(width, height) {
-    const wrapper = createWrapper(width, height);
+  #initDOM() {
+    const wrapper = createWrapper(this.#width, this.#height);
     const overlay = createOverlay();
     const {
       boundingBox: bbox,
@@ -583,13 +668,17 @@ class Paint {
 
 const canvas = document.querySelector('#painting-board');
 canvas.addEventListener('paint:onpaintstart', ({ detail }) => {
-  console.log('paint start: ', detail);
+  if (detail.type === 'MARKER') {
+    canvas.style.cursor = 'cell'
+  }
 });
 canvas.addEventListener('paint:onpaint', ({detail}) => {
-  console.log('painting: ', detail);
+  
 });
 canvas.addEventListener('paint:onpaintend', ({detail}) => {
-  console.log('paint end: ', detail);
+  if (detail.type === 'MARKER') {
+    canvas.style.cursor = 'default'
+  }
 });
 canvas.addEventListener('paint:onrotatestart', ({detail}) => {
   console.log('rotate start: ', detail);
@@ -618,11 +707,28 @@ canvas.addEventListener('paint:ondrag', ({detail}) => {
 canvas.addEventListener('paint:ondragend', ({detail}) => {
   console.log('drag end: ', detail);
 });
+canvas.addEventListener('paint:onimageload', ({detail}) => {
+  console.log('image load: ', detail);
+});
+canvas.addEventListener('paint:oncheckpoint', ({detail}) => {
+  console.log('checkpoint: ', detail);
+});
+canvas.addEventListener('paint:oncheckpointload', ({detail}) => {
+  console.log('checkpoint load: ', detail);
+});
 
 const paint = new Paint(canvas, 1200, 1200);
+
+const image = document.querySelector('#image');
+// paint.loadImage(image, 300, 300);
+paint.background('image', image);
+
+
 document.querySelector('#redo-btn').addEventListener('click', () => paint.redo());
 document.querySelector('#undo-btn').addEventListener('click', () => paint.undo());
 document.querySelector('#checkpoint-btn').addEventListener('click', () => paint.checkpoint());
+document.querySelector('#load-checkpoint-btn-1').addEventListener('click', () => paint.loadCheckpoint(1));
+document.querySelector('#load-checkpoint-btn-2').addEventListener('click', () => paint.loadCheckpoint(2));
 document.querySelector('#ellipse-btn').addEventListener('click', () => paint.ellipse());
 document.querySelector('#rectangle-btn').addEventListener('click', () => paint.rectangle());
 document.querySelector('#triangle-btn').addEventListener('click', () => paint.triangle({ lineType: 'none', fill: 'skyblue'}));

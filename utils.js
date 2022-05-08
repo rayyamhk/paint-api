@@ -6,7 +6,7 @@ const CONSTANT = {
   MARKER: 'MARKER',
   POINT: 'POINT',
   LINE: 'LINE',
-  TEXT: 'TEXT',
+  IMAGE: 'IMAGE',
 
   TOP: 'TOP',
   TOP_RIGHT: 'TOP_RIGHT',
