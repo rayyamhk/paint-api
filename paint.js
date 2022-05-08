@@ -11,8 +11,7 @@ class Paint {
   #id = 0;
 
   // action history
-  #undos = [];
-  #redos = [];
+  #history = new PaintHistory();
   #shouldAppendHistory = false;
 
   // actions state
@@ -37,8 +36,8 @@ class Paint {
 
   // utilities
   undo() {
-    if (this.#undos.length > 0) {
-      this.#redos.push(this.#undos.pop());
+    if (this.#history.undoable) {
+      this.#history.undo();
       this.#hideBoundingBox();
       this.#repaint();
       this.#dispatch('onundo');
@@ -46,8 +45,8 @@ class Paint {
   }
 
   redo() {
-    if (this.#redos.length > 0) {
-      this.#undos.push(this.#redos.pop());
+    if (this.#history.redoable) {
+      this.#history.redo();
       this.#repaint();
       this.#dispatch('onredo');
     }
@@ -55,6 +54,7 @@ class Paint {
 
   clear() {
     this.#hideBoundingBox();
+    this.#history.reset();
     this.#ctx.clearRect(0, 0, this.#ctx.canvas.width, this.#ctx.canvas.height);
     this.#dispatch('onclear');
   }
@@ -63,42 +63,24 @@ class Paint {
 
   save() {}
 
+  get state() {
+    return this.#history.history;
+  }
+
   // Geometries
-  ellipse(options = {}) {
-    const _options = {
-      lineType: options.lineType || 'solid', // 'none', 'solid'
-      lineWidth: options.lineWidth || 5,
-      lineColor: options.lineColor || '#000',
-      fill: options.fill,
-    };
-    this.#geometryShape(CONSTANT.ELLIPSE, _options);
+  ellipse(options) {
+    this.#geometryShape(CONSTANT.ELLIPSE, options);
   }
 
-  rectangle(options = {}) {
-    const _options = {
-      lineType: options.lineType || 'solid', // 'none', 'solid'
-      lineWidth: options.lineWidth || 5,
-      lineColor: options.lineColor || '#000',
-      fill: options.fill,
-    };
-    this.#geometryShape(CONSTANT.RECTANGLE, _options);
+  rectangle(options) {
+    this.#geometryShape(CONSTANT.RECTANGLE, options);
   }
 
-  triangle(options = {}) {
-    const _options = {
-      lineType: options.lineType || 'solid', // 'none', 'solid'
-      lineWidth: options.lineWidth || 5,
-      lineColor: options.lineColor || '#000',
-      fill: options.fill,
-    };
-    this.#geometryShape(CONSTANT.TRIANGLE, _options);
+  triangle(options) {
+    this.#geometryShape(CONSTANT.TRIANGLE, options);
   }
 
   line(options = {}) {
-    const _options = {
-      lineWidth: options.lineWidth || 5,
-      lineColor: options.lineColor || '#000',
-    };
     const onMouseDown = (e) => {
       e.preventDefault();
       this.#x = e.offsetX;
@@ -111,20 +93,20 @@ class Paint {
       if (this.#painting) {
         if (this.#shouldAppendHistory) {
           this.#shouldAppendHistory = false;
-          this.#redos = [];
-          this.#undos.push({
+          this.#history.push({
             id: this.#getId(),
             type: CONSTANT.LINE,
             state: {
-              ..._options,
+              lineWidth: options.lineWidth || 5,
+              lineColor: options.lineColor || '#000',
               startX: this.#x,
               startY: this.#y,
               endX: undefined,
               endY: undefined,
             },
-          })
+          });
         }
-        const state = last(this.#undos).state;
+        const state = this.#history.at(-1).state;
         state.endX = x;
         state.endY = y;
         window.requestAnimationFrame(() => this.#repaint());
@@ -133,7 +115,7 @@ class Paint {
     };
     const onMouseUp = () => {
       this.#painting = false;
-      this.#dispatch('onpaintend', last(this.#undos));
+      this.#dispatch('onpaintend', deepClone(this.#history.at(-1)));
     };
 
     this.#cleanUp();
@@ -152,18 +134,14 @@ class Paint {
 
   // Brushes
   eraser(options = {}) {
-    const _options = {
-      size: options.size || 5,
-    };
-    this.#brush(CONSTANT.ERASER, _options);
+    this.#brush(CONSTANT.ERASER, { size: options.size || 5});
   }
 
   marker(options = {}) {
-    const _options = {
+    this.#brush(CONSTANT.MARKER, {
       color: options.color || '#000000',
       size: options.size || 5,
-    };
-    this.#brush(CONSTANT.MARKER, _options);
+    });
   }
 
   // private methods
@@ -171,7 +149,7 @@ class Paint {
     this.#ctx.canvas.dispatchEvent(new CustomEvent(`paint:${event}`, { detail: data }))
   }
 
-  #geometryShape(shape, options) {
+  #geometryShape(shape, options = {}) {
     const onMouseDown = (e) => {
       e.preventDefault();
       this.#x = e.offsetX;
@@ -184,12 +162,14 @@ class Paint {
       if (this.#painting) {
         if (this.#shouldAppendHistory) {
           this.#shouldAppendHistory = false;
-          this.#redos = [];
-          this.#undos.push({
+          this.#history.push({
             id: this.#getId(),
             type: shape,
             state: {
-              ...options,
+              lineType: options.lineType || 'solid', // 'none', 'solid'
+              lineWidth: options.lineWidth || 5,
+              lineColor: options.lineColor || '#000',
+              fill: options.fill,
               centerX: this.#x,
               centerY: this.#y,
               width: 0,
@@ -198,7 +178,7 @@ class Paint {
             },
           });
         }
-        const state = last(this.#undos).state;
+        const state = this.#history.at(-1).state;
         state.width += dx * 2;
         state.height += dy * 2;
         window.requestAnimationFrame(() => this.#repaint());
@@ -212,9 +192,9 @@ class Paint {
         // 1. #undos is non-empty.
         // 2. The last action is editable, i.e. it is a geometry.
         // 3. The drawing has been finished, it's time to show the bounding box.
-        const action = last(this.#undos);
+        const action = this.#history.at(-1);
         this.#showBoundingBox(action.state);
-        this.#dispatch('onpaintend', action);
+        this.#dispatch('onpaintend', deepClone(action));
       } else {
         // It is true if and only if mousemove hasn't been triggered, i.e. mouseclick.
         this.#hideBoundingBox();
@@ -224,7 +204,7 @@ class Paint {
       if (this.#painting) {
         // After mouseup, the cursor will enter the bounding box which will trigger uncessary mouseleave.
         this.#painting = false;
-        this.#dispatch('onpaintend', last(this.#undos));
+        this.#dispatch('onpaintend', deepClone(this.#history.at(-1)));
       }
     }
 
@@ -248,8 +228,7 @@ class Paint {
       this.#x = e.offsetX;
       this.#y = e.offsetY;
       this.#painting = true;
-      this.#redos = [];
-      this.#undos.push({
+      this.#history.push({
         id: this.#getId(),
         type,
         state: {
@@ -265,7 +244,7 @@ class Paint {
     };
     const onMouseMove = ({ offsetX: x2, offsetY: y2 }) => {
       if (this.#painting) {
-        const trajectory = last(this.#undos).state.trajectory;
+        const trajectory = this.#history.at(-1).state.trajectory;
         const [x1, y1] = last(trajectory).pt;
         const dist = distance(x1, y1, x2, y2);
         if (dist < options.size * 0.35) {
@@ -287,12 +266,12 @@ class Paint {
     };
     const onMouseUp = () => {
       this.#painting = false;
-      this.#dispatch('onpaintend', last(this.#undos));
+      this.#dispatch('onpaintend', deepClone(this.#history.at(-1)));
     };
     const onMouseLeave = () => {
       if (this.#painting) {
         this.#painting = false;
-        this.#dispatch('onpaintend', last(this.#undos));
+        this.#dispatch('onpaintend', deepClone(this.#history.at(-1)));
       }
     }
 
@@ -312,14 +291,12 @@ class Paint {
 
   #repaint() {
     this.#ctx.clearRect(0, 0, this.#ctx.canvas.width, this.#ctx.canvas.height);
-    for (let i = 0; i < this.#undos.length; i++) {
-      const action = this.#undos[i];
-      const nextAction = this.#undos[i + 1];
-      if (nextAction && action.id === nextAction.id) {
+    this.#history.forEach(({ id, type, state }, i) => {
+      const nextAction = this.#history.at(i + 1);
+      if (nextAction && id === nextAction.id) {
         // Skip the current action, as the next action resizes/drags/rotates the current geometry.
-        continue;
+        return;
       }
-      const { type, state } = action;
       if (type === CONSTANT.MARKER) {
         this.#drawMarker(state);
       } else if (type === CONSTANT.ERASER) {
@@ -333,7 +310,7 @@ class Paint {
       } else if (type === CONSTANT.LINE) {
         this.#drawLine(state);
       }
-    }
+    });
   }
 
   #drawEllipse(state) {
@@ -457,7 +434,7 @@ class Paint {
         this.#resizing = true;
         this.#resizeDirection = controller._direction;
         this.#shouldAppendHistory = true;
-        const state = last(this.#undos).state;
+        const state = this.#history.at(-1).state;
         this.#flipX = state.width < 0 ? -1 : 1;
         this.#flipY = state.height < 0 ? -1 : 1;
         overlay.style.zIndex = 1;
@@ -490,12 +467,12 @@ class Paint {
 
       if (this.#shouldAppendHistory) {
         this.#shouldAppendHistory = false;
-        const prev = last(this.#undos);
-        this.#undos.push({
+        const prev = this.#history.at(-1);
+        this.#history.push({
           ...prev,
           state: {
-            ...prev.state
-          },
+            ...prev.state,
+          }
         });
       }
 
@@ -505,7 +482,7 @@ class Paint {
         movementX: dx,
         movementY: dy,
       } = e;
-      const state = last(this.#undos).state;
+      const state = this.#history.at(-1).state;
 
       if (this.#dragging) {
         state.centerX += dx;
@@ -583,7 +560,7 @@ class Paint {
     ['mouseup', 'mouseleave'].forEach((event) => {
       overlay.addEventListener(event, (e) => {
         e.stopPropagation();
-        const action = last(this.#undos);
+        const action = this.#history.at(-1);
         if (this.#dragging) {
           this.#dragging = false;
           this.#dispatch('ondragend', action);
