@@ -190,3 +190,99 @@ const drawGeometry = (ctx, type, state) => {
   }
   ctx.restore();
 }
+
+class PaintHistory {
+  #undos = [];
+  #redos = [];
+
+  get undoable() {
+    return this.#undos.length > 0;
+  }
+
+  get redoable() {
+    return this.#redos.length > 0;
+  }
+
+  get size() {
+    return this.#undos.length;
+  }
+
+  push(el) {
+    this.#undos.push(el);
+    this.#redos = [];
+  }
+
+  forEach(cb) {
+    this.#undos.forEach(cb);
+  }
+
+  undo() {
+    if (this.#undos.length > 0) {
+      this.#redos.push(this.#undos.pop());
+    }
+  }
+
+  redo() {
+    if (this.#redos.length > 0) {
+      this.#undos.push(this.#redos.pop());
+    }
+  }
+
+  reset() {
+    this.#undos = [];
+    this.#redos = [];
+  }
+
+  at(i) {
+    if (i >= 0) {
+      return this.#undos[i];
+    }
+    return this.#undos[this.#undos.length + i];
+  }
+}
+
+const isPrimitive = (el) => Object(el) !== el || typeof el === 'function';
+
+const cloneArray = (assigned, array) => {
+  array.forEach((el, i) => {
+    if (isPrimitive(el)) {
+      assigned[i] = el;
+    } else if (Array.isArray(el)) {
+      assigned[i] = [];
+      cloneArray(assigned[i], el);
+    } else {
+      assigned[i] = {};
+      cloneObject(assigned[i], el);
+    }
+  });
+};
+
+const cloneObject = (assigned, obj) => {
+  Object.entries(obj).forEach(([k, v]) => {
+    if (isPrimitive(v)) {
+      assigned[k] = v;
+    } else if (Array.isArray(v)) {
+      assigned[k] = [];
+      cloneArray(assigned[k], v);
+    } else {
+      assigned[k] = {};
+      cloneObject(assigned[k], v);
+    }
+  });
+};
+
+const deepClone = (obj) => {
+  if (typeof obj !== 'object') {
+    return obj;
+  }
+
+  let assigned;
+  if (Array.isArray(obj)) {
+    assigned = [];
+    cloneArray(assigned, obj);
+  } else {
+    assigned = {};
+    cloneObject(assigned, obj);
+  }
+  return assigned;
+};
