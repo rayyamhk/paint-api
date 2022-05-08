@@ -236,25 +236,22 @@ class Paint {
       this.#x = e.offsetX;
       this.#y = e.offsetY;
       this.#painting = true;
-      this.#shouldAppendHistory = true;
+      this.#redos = [];
+      this.#undos.push({
+        id: this.#getId(),
+        type,
+        state: {
+          ...options,
+          trajectory: [{
+            pt: [this.#x, this.#y],
+            type: CONSTANT.POINT,
+          }],
+        }
+      });
+      window.requestAnimationFrame(() => this.#repaint());
     };
     const onMouseMove = ({ offsetX: x2, offsetY: y2 }) => {
       if (this.#painting) {
-        if (this.#shouldAppendHistory) {
-          this.#shouldAppendHistory = false;
-          this.#redos = [];
-          this.#undos.push({
-            id: this.#getId(),
-            type,
-            state: {
-              ...options,
-              trajectory: [{
-                pt: [this.#x, this.#y],
-                type: CONSTANT.POINT,
-              }],
-            }
-          });
-        }
         const trajectory = last(this.#undos).state.trajectory;
         const [x1, y1] = last(trajectory).pt;
         const dist = distance(x1, y1, x2, y2);
@@ -607,6 +604,6 @@ document.querySelector('#checkpoint-btn').addEventListener('click', () => paint.
 document.querySelector('#ellipse-btn').addEventListener('click', () => paint.ellipse());
 document.querySelector('#rectangle-btn').addEventListener('click', () => paint.rectangle());
 document.querySelector('#triangle-btn').addEventListener('click', () => paint.triangle({ lineType: 'none', fill: 'skyblue'}));
-document.querySelector('#marker-btn').addEventListener('click', () => paint.marker());
+document.querySelector('#marker-btn').addEventListener('click', () => paint.marker({ size : 20 }));
 document.querySelector('#eraser-btn').addEventListener('click', () => paint.eraser({ size: 20 }));
 document.querySelector('#line-btn').addEventListener('click', () => paint.line());
