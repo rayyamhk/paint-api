@@ -41,6 +41,7 @@ class Paint {
       this.#redos.push(this.#undos.pop());
       this.#hideBoundingBox();
       this.#repaint();
+      this.#dispatch('onundo');
     }
   }
 
@@ -48,21 +49,19 @@ class Paint {
     if (this.#redos.length > 0) {
       this.#undos.push(this.#redos.pop());
       this.#repaint();
+      this.#dispatch('onredo');
     }
   }
 
   clear() {
     this.#hideBoundingBox();
     this.#ctx.clearRect(0, 0, this.#ctx.canvas.width, this.#ctx.canvas.height);
+    this.#dispatch('onclear');
   }
 
   checkpoint() {}
 
   save() {}
-
-  get state() {
-    return this.#undos;
-  }
 
   // Geometries
   ellipse(options = {}) {
@@ -106,6 +105,7 @@ class Paint {
       this.#y = e.offsetY;
       this.#painting = true;
       this.#shouldAppendHistory = true;
+      this.#dispatch('onpaintstart', { type: CONSTANT.LINE, x: this.#x, y: this.#y });
     };
     const onMouseMove = ({ offsetX: x, offsetY: y }) => {
       if (this.#painting) {
@@ -128,10 +128,12 @@ class Paint {
         state.endX = x;
         state.endY = y;
         window.requestAnimationFrame(() => this.#repaint());
+        this.#dispatch('onpaint', { type: CONSTANT.LINE, x, y });
       };
     };
     const onMouseUp = () => {
       this.#painting = false;
+      this.#dispatch('onpaintend', last(this.#undos));
     };
 
     this.#cleanUp();
@@ -165,6 +167,10 @@ class Paint {
   }
 
   // private methods
+  #dispatch(event, data) {
+    this.#ctx.canvas.dispatchEvent(new CustomEvent(`paint:${event}`, { detail: data }))
+  }
+
   #geometryShape(shape, options) {
     const onMouseDown = (e) => {
       e.preventDefault();
@@ -172,6 +178,7 @@ class Paint {
       this.#y = e.offsetY;
       this.#painting = true;
       this.#shouldAppendHistory = true;
+      this.#dispatch('onpaintstart', { type: shape });
     };
     const onMouseMove = ({ movementX: dx, movementY: dy }) => {
       if (this.#painting) {
@@ -195,6 +202,7 @@ class Paint {
         state.width += dx * 2;
         state.height += dy * 2;
         window.requestAnimationFrame(() => this.#repaint());
+        this.#dispatch('onpaint', { type: shape, dx, dy });
       }
     };
     const onMouseUp = () => {
@@ -204,16 +212,20 @@ class Paint {
         // 1. #undos is non-empty.
         // 2. The last action is editable, i.e. it is a geometry.
         // 3. The drawing has been finished, it's time to show the bounding box.
-        const state = last(this.#undos).state;
-        const { centerX, centerY, width, height, rotate } = state;
-        this.#showBoundingBox(centerX, centerY, width, height, rotate);
+        const action = last(this.#undos);
+        this.#showBoundingBox(action.state);
+        this.#dispatch('onpaintend', action);
       } else {
         // It is true if and only if mousemove hasn't been triggered, i.e. mouseclick.
         this.#hideBoundingBox();
       }
     };
     const onMouseLeave = () => {
-      this.#painting = false;
+      if (this.#painting) {
+        // After mouseup, the cursor will enter the bounding box which will trigger uncessary mouseleave.
+        this.#painting = false;
+        this.#dispatch('onpaintend', last(this.#undos));
+      }
     }
 
     this.#cleanUp();
@@ -249,6 +261,7 @@ class Paint {
         }
       });
       window.requestAnimationFrame(() => this.#repaint());
+      this.#dispatch('onpaintstart', { type, x: this.#x, y: this.#y });
     };
     const onMouseMove = ({ offsetX: x2, offsetY: y2 }) => {
       if (this.#painting) {
@@ -269,23 +282,31 @@ class Paint {
           });
         }
         window.requestAnimationFrame(() => this.#repaint());
+        this.#dispatch('onpaint', { type, x: x2, y: y2 });
       }
     };
     const onMouseUp = () => {
       this.#painting = false;
+      this.#dispatch('onpaintend', last(this.#undos));
     };
+    const onMouseLeave = () => {
+      if (this.#painting) {
+        this.#painting = false;
+        this.#dispatch('onpaintend', last(this.#undos));
+      }
+    }
 
     this.#cleanUp();
     this.#hideBoundingBox();
     this.#ctx.canvas.addEventListener('mousedown', onMouseDown);
     this.#ctx.canvas.addEventListener('mousemove', onMouseMove);
     this.#ctx.canvas.addEventListener('mouseup', onMouseUp);
-    this.#ctx.canvas.addEventListener('mouseleave', onMouseUp);
+    this.#ctx.canvas.addEventListener('mouseleave', onMouseLeave);
     this.#cleanUp = () => {
       this.#ctx.canvas.removeEventListener('mousedown', onMouseDown);
       this.#ctx.canvas.removeEventListener('mousemove', onMouseMove);
       this.#ctx.canvas.removeEventListener('mouseup', onMouseUp);
-      this.#ctx.canvas.removeEventListener('mouseleave', onMouseUp);
+      this.#ctx.canvas.removeEventListener('mouseleave', onMouseLeave);
     };
   }
 
@@ -316,57 +337,27 @@ class Paint {
   }
 
   #drawEllipse(state) {
-    const {
-      centerX: cx,
-      centerY: cy,
-      width: w,
-      height: h,
-      rotate: r,
-    } = state;
     if (this.#resizing || this.#rotating || this.#dragging) {
-      this.#showBoundingBox(cx, cy, w, h, r);
+      this.#showBoundingBox(state);
     }
     drawGeometry(this.#ctx, CONSTANT.ELLIPSE, state);
   }
 
   #drawRectangle(state) {
-    const {
-      centerX: cx,
-      centerY: cy,
-      width: w,
-      height: h,
-      rotate: r,
-    } = state;
     if (this.#resizing || this.#rotating || this.#dragging) {
-      this.#showBoundingBox(cx, cy, w, h, r);
+      this.#showBoundingBox(state);
     }
     drawGeometry(this.#ctx, CONSTANT.RECTANGLE, state);
   }
 
   #drawTriangle(state) {
-    const {
-      centerX: cx,
-      centerY: cy,
-      width: w,
-      height: h,
-      rotate: r,
-    } = state;
     if (this.#resizing || this.#rotating || this.#dragging) {
-      this.#showBoundingBox(cx, cy, w, h, r);
+      this.#showBoundingBox(state);
     }
     drawGeometry(this.#ctx, CONSTANT.TRIANGLE, state);
   }
 
-  #drawLine(state) {
-    const {
-      startX: x1,
-      startY: y1,
-      endX: x2,
-      endY: y2,
-      lineColor,
-      lineWidth,
-    } = state;
-
+  #drawLine({ startX: x1, startY: y1, endX: x2, endY: y2, lineColor, lineWidth }) {
     this.#ctx.save();
     this.#ctx.beginPath();
     this.#ctx.moveTo(x1, y1);
@@ -377,8 +368,7 @@ class Paint {
     this.#ctx.restore();
   }
 
-  #drawMarker(state) {
-    const { color, trajectory, size } = state;
+  #drawMarker({ color, trajectory, size }) {
     this.#ctx.save();
     this.#ctx.fillStyle = color;
     this.#ctx.strokeStyle = color;
@@ -401,8 +391,7 @@ class Paint {
     this.#ctx.restore();
   }
 
-  #drawEraser(state) {
-    const { trajectory, size } = state;
+  #drawEraser({ trajectory, size }) {
     this.#ctx.save();
     this.#ctx.globalCompositeOperation = 'destination-out';
     this.#ctx.lineWidth = size;
@@ -424,21 +413,21 @@ class Paint {
     this.#ctx.restore();
   }
 
-  #showBoundingBox(centerX, centerY, width, height, rotate) {
-    width = Math.abs(width);
-    height = Math.abs(height);
+  #showBoundingBox({ centerX: cx, centerY: cy, width: w, height: h, rotate: r }) {
+    w = Math.abs(w);
+    h = Math.abs(h);
 
     // bounding box states
-    this.#bbox._centerX = centerX;
-    this.#bbox._centerY = centerY;
-    this.#bbox._width = width;
-    this.#bbox._height = height;
+    this.#bbox._centerX = cx;
+    this.#bbox._centerY = cy;
+    this.#bbox._width = w;
+    this.#bbox._height = h;
 
-    this.#bbox.style.width = width + 'px';
-    this.#bbox.style.height = height + 'px';
+    this.#bbox.style.width = w + 'px';
+    this.#bbox.style.height = h + 'px';
     this.#bbox.style.transform = `
-      translate(${centerX - width * 0.5}px, ${centerY - height * 0.5}px)
-      rotate(${rotate}rad)
+      translate(${cx - w * 0.5}px, ${cy - h * 0.5}px)
+      rotate(${r}rad)
     `;
   }
 
@@ -472,6 +461,7 @@ class Paint {
         this.#flipX = state.width < 0 ? -1 : 1;
         this.#flipY = state.height < 0 ? -1 : 1;
         overlay.style.zIndex = 1;
+        this.#dispatch('onresizestart', { direction: this.#resizeDirection });
       });
     });
 
@@ -481,6 +471,7 @@ class Paint {
       this.#dragging = true;
       this.#shouldAppendHistory = true;
       overlay.style.zIndex = 1;
+      this.#dispatch('ondragstart');
     });
 
     bbox.addEventListener(('mousedown'), (e) => {
@@ -491,10 +482,12 @@ class Paint {
       this.#x = bbox._centerX - bbox._width * 0.5 + e.offsetX;
       this.#y = bbox._centerY - bbox._height * 0.5 + e.offsetY;
       overlay.style.zIndex = 1;
+      this.#dispatch('onrotatestart');
     });
 
     overlay.addEventListener('mousemove', (e) => {
       e.stopPropagation();
+
       if (this.#shouldAppendHistory) {
         this.#shouldAppendHistory = false;
         const prev = last(this.#undos);
@@ -518,6 +511,7 @@ class Paint {
         state.centerX += dx;
         state.centerY += dy;
         overlay.style.cursor = 'move';
+        this.#dispatch('ondrag', { dx, dy });
       } else if (this.#resizing) {
         switch (this.#resizeDirection) {
           case CONSTANT.TOP:
@@ -569,12 +563,18 @@ class Paint {
             overlay.style.cursor = 'nwse-resize';
             break;
         }
+        this.#dispatch('onresize', { direction: this.#resizeDirection, dx, dy });
       } else if (this.#rotating) {
         const cx = state.centerX;
         const cy = state.centerY;
         const baseAngle = atan(cx, cy, this.#x, this.#y); // angle of the starting position,
-        state.rotate = atan(cx, cy, x, y) - baseAngle;
+        let rotation = atan(cx, cy, x, y) - baseAngle;
+        if (rotation < 0) {
+          rotation += Math.PI * 2;
+        }
+        state.rotate = rotation;
         overlay.style.cursor = 'grab';
+        this.#dispatch('onrotate', { rotation });
       }
 
       window.requestAnimationFrame(() => this.#repaint());
@@ -583,9 +583,17 @@ class Paint {
     ['mouseup', 'mouseleave'].forEach((event) => {
       overlay.addEventListener(event, (e) => {
         e.stopPropagation();
-        this.#dragging = false;
-        this.#resizing = false;
-        this.#rotating = false;
+        const action = last(this.#undos);
+        if (this.#dragging) {
+          this.#dragging = false;
+          this.#dispatch('ondragend', action);
+        } else if (this.#resizing) {
+          this.#resizing = false;
+          this.#dispatch('onresizeend', action);
+        } else if (this.#rotating) {
+          this.#rotating = false;
+          this.#dispatch('onrotateend', action);
+        }
         overlay.style.zIndex = -1;
       });
     });
@@ -597,6 +605,43 @@ class Paint {
 }
 
 const canvas = document.querySelector('#painting-board');
+canvas.addEventListener('paint:onpaintstart', ({ detail }) => {
+  console.log('paint start: ', detail);
+});
+canvas.addEventListener('paint:onpaint', ({detail}) => {
+  console.log('painting: ', detail);
+});
+canvas.addEventListener('paint:onpaintend', ({detail}) => {
+  console.log('paint end: ', detail);
+});
+canvas.addEventListener('paint:onrotatestart', ({detail}) => {
+  console.log('rotate start: ', detail);
+});
+canvas.addEventListener('paint:onrotate', ({detail}) => {
+  console.log('rotating: ', detail);
+});
+canvas.addEventListener('paint:onrotateend', ({detail}) => {
+  console.log('rotate end: ', detail);
+});
+canvas.addEventListener('paint:onresizestart', ({detail}) => {
+  console.log('resize start: ', detail);
+});
+canvas.addEventListener('paint:onresize', ({detail}) => {
+  console.log('resizing: ', detail);
+});
+canvas.addEventListener('paint:onresizeend', ({detail}) => {
+  console.log('resize end: ', detail);
+});
+canvas.addEventListener('paint:ondragstart', ({detail}) => {
+  console.log('drag start: ', detail);
+});
+canvas.addEventListener('paint:ondrag', ({detail}) => {
+  console.log('dragging: ', detail);
+});
+canvas.addEventListener('paint:ondragend', ({detail}) => {
+  console.log('drag end: ', detail);
+});
+
 const paint = new Paint(canvas, 1200, 1200);
 document.querySelector('#redo-btn').addEventListener('click', () => paint.redo());
 document.querySelector('#undo-btn').addEventListener('click', () => paint.undo());
