@@ -1,0 +1,114 @@
+#paint-wrapper {
+  position: relative;
+  overflow: hidden;
+}
+
+#paint-overlay,
+#paint-background,
+#paint-checkpoint {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+#paint-overlay {
+  z-index: -9999;
+}
+
+#paint-background {
+  z-index: -2;
+}
+
+#paint-checkpoint {
+  z-index: -1;
+}
+
+#paint-bbox {
+  outline: 1px dashed #000;
+  outline-offset: 2px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 9998;
+  transform: translate(-9999px, -9999px);
+  cursor: grab;
+}
+
+#paint-bbox .controller {
+  width: 10px;
+  height: 10px;
+  border: 1px solid #fff;
+  border-radius: 50%;
+  background-color: #3498db;
+  position: absolute;
+}
+
+/** TOP */
+#paint-bbox .controller:nth-child(1) {
+  top: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  cursor: ns-resize;
+}
+
+/** TOP-RIGHT */
+#paint-bbox .controller:nth-child(2) {
+  top: -7px;
+  right: -7px;
+  cursor: nesw-resize;
+}
+
+/** RIGHT */
+#paint-bbox .controller:nth-child(3) {
+  right: -7px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: ew-resize;
+}
+
+/** BOTTOM-RIGHT */
+#paint-bbox .controller:nth-child(4) {
+  bottom: -7px;
+  right: -7px;
+  cursor: nwse-resize;
+}
+
+/** BOTTOM */
+#paint-bbox .controller:nth-child(5) {
+  bottom: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  cursor: ns-resize;
+}
+
+/** BOTTOM-LEFT */
+#paint-bbox .controller:nth-child(6) {
+  bottom: -7px;
+  left: -7px;
+  cursor: nesw-resize;
+}
+
+/** LEFT */
+#paint-bbox .controller:nth-child(7) {
+  left: -7px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: ew-resize;
+}
+
+/** TOP-LEFT */
+#paint-bbox .controller:nth-child(8) {
+  top: -7px;
+  left: -7px;
+  cursor: nwse-resize;
+}
+
+/** CENTER */
+#paint-bbox .controller:nth-child(9) {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  cursor: move;
+}

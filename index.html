@@ -5,11 +5,14 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Painter</title>
+  <link rel="stylesheet" href="paint.css" >
 </head>
-<body style="display: grid; place-content: center;">
+<body style="display: grid; place-content: center; background-color: aqua;">
   <img id="image" style="width: 1px; height:1px" src="https://otakukart.com/wp-content/uploads/2022/04/Anya-forger.jpg" />
   <button id="redo-btn">Redo</button>
   <button id="undo-btn">Undo</button>
+  <button id="clear-btn">Clear</button>
+  <button id="zoom-btn">Zoom</button>
   <button id="checkpoint-btn">Checkpoint</button>
   <button id="load-checkpoint-btn-1">Load Checkpoint 1</button>
   <button id="load-checkpoint-btn-2">Load Checkpoint 2</button>
@@ -18,9 +21,11 @@
   <button id="triangle-btn">Triangle</button>
   <button id="line-btn">Line</button>
   <button id="marker-btn">Marker</button>
+  <button id="highlighter-btn">highlighter</button>
   <button id="eraser-btn">Eraser</button>
   <canvas id="painting-board" style="border: 1px solid black"></canvas>
   <script src="utils.js"></script>
+  <script src="History.js"></script>
   <script src="paint.js"></script>
 </body>
 </html>

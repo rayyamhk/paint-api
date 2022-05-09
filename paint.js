@@ -3,11 +3,18 @@ class Paint {
   #height;
   #bbox;
   #ctx;
-  #drawBackground = () => {};
+  #background;
   #cleanUp = () => {};
 
+  #painters = {};
   #checkpoints = [];
   #activeCheckpoint = -1;
+
+  // zoom
+  #zoomingIn = false;
+  #zoomFactor = 1;
+  #zoomX;
+  #zoomY;
 
   // initial mousedown position
   #x;
@@ -25,7 +32,7 @@ class Paint {
   #dragging = false;
   #rotating = false;
   #resizing = false;
-  #resizeDirection; 
+  #resizeDirection;
   #flipX = 1; // check if the bounding box has been flipped, use to correct the result of resize result.
   #flipY = 1;
 
@@ -48,7 +55,7 @@ class Paint {
       this.#history.undo();
       this.#hideBoundingBox();
       this.#repaint();
-      this.#dispatch('onundo');
+      this.#dispatch('undo');
     }
   }
 
@@ -56,27 +63,26 @@ class Paint {
     if (this.#history.redoable) {
       this.#history.redo();
       this.#repaint();
-      this.#dispatch('onredo');
+      this.#dispatch('redo');
     }
   }
 
   clear() {
     this.#hideBoundingBox();
     this.#history.reset();
-    this.#ctx.clearRect(0, 0, this.#ctx.canvas.width, this.#ctx.canvas.height);
-    this.#dispatch('onclear');
+    this.#ctx.clearRect(0, 0, this.#width, this.#height);
+    this.#dispatch('clear');
   }
 
   checkpoint() {
-    const canvas = this.#ctx.canvas;
-    const offscreenCanvas = canvas.cloneNode();
-    const offscreenCtx = offscreenCanvas.getContext('2d');
-    offscreenCtx.drawImage(canvas, 0, 0);
-    this.#checkpoints.push(offscreenCanvas);
+    const canvas = this.#ctx.canvas.cloneNode();
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(this.#ctx.canvas, 0, 0);
+    this.#checkpoints.push(canvas);
     this.#activeCheckpoint = this.#checkpoints.length - 1;
     this.#hideBoundingBox();
     this.#history.reset();
-    this.#dispatch('oncheckpoint', { checkpoint: this.#activeCheckpoint });
+    this.#dispatch('checkpoint', { checkpoint: this.#activeCheckpoint });
   }
 
   loadCheckpoint(i) {
@@ -85,68 +91,215 @@ class Paint {
       this.#history.reset();
       this.#repaint();
       this.#hideBoundingBox();
-      this.#dispatch('oncheckpointload', { checkpoint: i });
+      this.#dispatch('loadcheckpoint', { checkpoint: i });
     }
   }
 
-  save() {}
+  // TODO:
+  // 1. combine background and the canvas together.
+  // 2. Export - single canvas.
+  export() {}
 
   background(type, content) {
-    if (type === 'fill') {
-      this.#drawBackground = () => {
-        this.#ctx.fillStyle = content;
-        this.#ctx.fillRect(0, 0, this.#ctx.canvas.width, this.#ctx.canvas.height);
-        this.#ctx.fillStyle = '#000'; // reset
-      };
-    } else if (type === 'image') {
-      this.#drawBackground = () => {
-        this.#ctx.drawImage(content, 0, 0, this.#ctx.canvas.width, this.#ctx.canvas.height);
-      };
+    if (type === 'fill' || type === 'image') {
+      const ctx = this.#background.getContext('2d');
+      if (type === 'fill') {
+        ctx.fillStyle = content;
+        ctx.fillRect(0, 0, this.#width, this.#height);
+      } else {
+        ctx.drawImage(content, 0, 0, this.#width, this.#height);
+      }
+      this.#dispatch('background');
     }
-    this.#drawBackground();
   }
 
-  loadImage(image, width, height) {
-    const state = {
-      source: image,
-      centerX: this.#width * 0.5,
-      centerY: this.#height * 0.5,
-      width,
-      height,
-      rotate: 0,
-    }
-    this.#history.push({
-      id: this.#getId(),
-      type: CONSTANT.IMAGE,
-      state,
-    });
+  zoom(factor) {
+    const w = this.#width / factor;
+    const h = this.#height / factor;
+    const hw = w * 0.5; // half width
+    const hh = h * 0.5; // half height
 
-    const handler = (e) => {
+    const onMouseMove = ({ offsetX: x, offsetY: y }) => {
+      if (!this.#zoomingIn) {
+        window.requestAnimationFrame(() => {
+          this.#repaint();
+          this.#ctx.beginPath();
+          this.#ctx.moveTo(x - hw, y - hh);
+          this.#ctx.lineTo(x + hw, y - hh);
+          this.#ctx.lineTo(x + hw, y + hh);
+          this.#ctx.lineTo(x - hw, y + hh);
+          this.#ctx.closePath();
+          this.#ctx.lineWidth = 2;
+          this.#ctx.strokeStyle = '#fff';
+          this.#ctx.stroke();
+          this.#ctx.lineWidth = 1.0;
+          this.#ctx.strokeStyle = '#000';
+        });
+      }
+    };
+    const onMouseDown = (e) => {
       e.preventDefault();
-      this.#hideBoundingBox();
+      e.stopPropagation();
+      if (!this.#zoomingIn) {
+        this.#zoomingIn = true;
+        this.#zoomX = Math.min(Math.max(e.offsetX, hw), this.#width - hw);
+        this.#zoomY = Math.min(Math.max(e.offsetY, hh), this.#height - hh);
+        this.#zoomFactor = factor;
+        this.#repaint();
+      } else {
+        this.#zoomingIn = false;
+        this.#zoomFactor = 1;
+        this.#repaint();
+      }
     };
 
     this.#cleanUp();
-    this.#showBoundingBox(state);
-    this.#ctx.canvas.addEventListener('mousedown', handler);
-    window.requestAnimationFrame(() => this.#repaint());
-    this.#dispatch('onimageload', deepClone(this.#history.at(-1)))
-    this.#cleanUp = () => this.#ctx.canvas.removeEventListener('mousedown', handler);
+    this.#ctx.canvas.style.cursor = 'zoom-in';
+    this.#ctx.canvas.addEventListener('mousemove', onMouseMove);
+    this.#ctx.canvas.addEventListener('mousedown', onMouseDown);
+    this.#hideBoundingBox();
+    this.#cleanUp = () => {
+      this.#ctx.canvas.style.cursor = 'default';
+      this.#ctx.canvas.removeEventListener('mousemove', onMouseMove);
+      this.#ctx.canvas.removeEventListener('mousedown', onMouseDown);
+    }
+  }
+
+  customGeometry(shape, painter) {
+    this.#painters[shape] = (ctx, state) => {
+      if (this.#resizing || this.#rotating || this.#dragging) {
+        this.#showBoundingBox(state);
+      }
+      painter(ctx, state);
+    };
+
+    return (width, height, options = {}) => {
+      const bboxState = {
+        centerX: this.#width * 0.5,
+        centerY: this.#height * 0.5,
+        width,
+        height,
+        rotate: 0,
+      };
+      this.#history.push({
+        id: this.#getId(),
+        type: shape,
+        state: {
+          ...options,
+          ...bboxState,
+        },
+      });
+  
+      const handler = (e) => {
+        e.preventDefault();
+        this.#hideBoundingBox();
+      };
+  
+      this.#cleanUp();
+      this.#ctx.canvas.addEventListener('mousedown', handler);
+      this.#showBoundingBox(bboxState);
+      window.requestAnimationFrame(() => this.#repaint());
+      this.#cleanUp = () => this.#ctx.canvas.removeEventListener('mousedown', handler);
+      this.#dispatch('geometry', deepClone(this.#history.at(-1)));
+    };
+  }
+
+  customBrush(type, painter) {
+    this.#painters[type] = painter;
+
+    return (options = {}) => {
+      const onMouseDown = (e) => {
+        e.preventDefault();
+        this.#x = e.offsetX;
+        this.#y = e.offsetY;
+        this.#painting = true;
+        this.#history.push({
+          id: this.#getId(),
+          type,
+          state: {
+            ...options,
+            trajectory: [{
+              pt: [this.#x, this.#y],
+              type: CONSTANT.POINT,
+            }],
+          }
+        });
+        window.requestAnimationFrame(() => this.#repaint());
+        this.#dispatch('brushstart', { type, x: this.#x, y: this.#y });
+      };
+      const onMouseMove = ({ offsetX: x2, offsetY: y2 }) => {
+        if (this.#painting) {
+          const trajectory = this.#history.at(-1).state.trajectory;
+          const [x1, y1] = last(trajectory).pt;
+          const dist = distance(x1, y1, x2, y2);
+          if (dist < options.size * 0.35) {
+            // If two points are closed enough, connect by a point.
+            trajectory.push({
+              pt: [x2, y2],
+              type: CONSTANT.POINT,
+            });
+          } else if (dist > options.size / Math.sqrt(2)) {
+            // If two points are far enough, connect by a straight line.
+            trajectory.push({
+              pt: [x2, y2],
+              type: CONSTANT.LINE,
+            });
+          }
+          window.requestAnimationFrame(() => this.#repaint());
+          this.#dispatch('brush', { type, x: x2, y: y2 });
+        }
+      };
+      const onMouseUp = () => {
+        this.#painting = false;
+        this.#dispatch('brushend', deepClone(this.#history.at(-1)));
+      };
+  
+      this.#cleanUp();
+      this.#ctx.canvas.addEventListener('mousedown', onMouseDown);
+      this.#ctx.canvas.addEventListener('mousemove', onMouseMove);
+      this.#ctx.canvas.addEventListener('mouseup', onMouseUp);
+      this.#ctx.canvas.addEventListener('mouseleave', onMouseUp);
+      this.#hideBoundingBox();
+      this.#cleanUp = () => {
+        this.#ctx.canvas.removeEventListener('mousedown', onMouseDown);
+        this.#ctx.canvas.removeEventListener('mousemove', onMouseMove);
+        this.#ctx.canvas.removeEventListener('mouseup', onMouseUp);
+        this.#ctx.canvas.removeEventListener('mouseleave', onMouseUp);
+      };
+    };
+  }
+
+  loadImage(image, width, height) {
+    this.customGeometry(CONSTANT.IMAGE, (ctx, state) => {
+      const { source, centerX: cx, centerY: cy, width: w, height: h, rotate: r } = state;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(r);
+      ctx.drawImage(source, -w * 0.5, -h * 0.5, w, h);
+      ctx.restore();
+    })(width, height, { source: image });
   }
 
   // Geometries
-  ellipse(options) {
-    this.#geometryShape(CONSTANT.ELLIPSE, options);
+  ellipse(width, height, options) {
+    this.customGeometry(CONSTANT.ELLIPSE, (ctx, state) => {
+      drawGeometry(CONSTANT.ELLIPSE, ctx, state);
+    })(width, height, options);
   }
 
-  rectangle(options) {
-    this.#geometryShape(CONSTANT.RECTANGLE, options);
+  rectangle(width, height, options) {
+    this.customGeometry(CONSTANT.RECTANGLE, (ctx, state) => {
+      drawGeometry(CONSTANT.RECTANGLE, ctx, state);
+    })(width, height, options);
   }
 
-  triangle(options) {
-    this.#geometryShape(CONSTANT.TRIANGLE, options);
+  triangle(width, height, options) {
+    this.customGeometry(CONSTANT.TRIANGLE, (ctx, state) => {
+      drawGeometry(CONSTANT.TRIANGLE, ctx, state);
+    })(width, height, options);
   }
 
+  // TODO: bounding box
   line(options = {}) {
     const onMouseDown = (e) => {
       e.preventDefault();
@@ -200,15 +353,53 @@ class Paint {
   }
 
   // Brushes
-  eraser(options = {}) {
-    this.#brush(CONSTANT.ERASER, { size: options.size || 5});
+  eraser(options) {
+    this.customBrush(CONSTANT.ERASER, (ctx, { size = 5, trajectory }) => {
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.lineWidth = size;
+      ctx.lineCap = 'round';
+      trajectory.forEach(({ pt, type }, i) => {
+        const [x, y] = pt;
+        if (type === CONSTANT.POINT) {
+          ctx.beginPath();
+          ctx.arc(x, y, size * 0.5, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (type === CONSTANT.LINE) {
+          const [x1, y1] = trajectory[i - 1].pt;
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x, y);
+          ctx.stroke();
+        }
+      });
+      ctx.restore();
+    })(options);
   }
 
-  marker(options = {}) {
-    this.#brush(CONSTANT.MARKER, {
-      color: options.color || '#000000',
-      size: options.size || 5,
-    });
+  marker(options) {
+    this.customBrush(CONSTANT.MARKER, (ctx, { color = '#000', size = 5, trajectory }) => {
+      ctx.save()
+      ctx.fillStyle = color;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = size;
+      ctx.lineCap = 'round';
+      trajectory.forEach(({ pt, type }, i) => {
+        const [x, y] = pt;
+        if (type === CONSTANT.POINT) {
+          ctx.beginPath();
+          ctx.arc(x, y, size * 0.5, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (type === CONSTANT.LINE) {
+          const [x1, y1] = trajectory[i - 1].pt;
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x, y);
+          ctx.stroke();
+        }
+      });
+      ctx.restore();
+    })(options);
   }
 
   // private methods
@@ -216,281 +407,48 @@ class Paint {
     this.#ctx.canvas.dispatchEvent(new CustomEvent(`paint:${event}`, { detail: data }))
   }
 
-  #geometryShape(shape, options = {}) {
-    const onMouseDown = (e) => {
-      e.preventDefault();
-      this.#x = e.offsetX;
-      this.#y = e.offsetY;
-      this.#painting = true;
-      this.#shouldAppendHistory = true;
-      this.#dispatch('onpaintstart', { type: shape });
-    };
-    const onMouseMove = ({ movementX: dx, movementY: dy }) => {
-      if (this.#painting) {
-        if (this.#shouldAppendHistory) {
-          this.#shouldAppendHistory = false;
-          this.#history.push({
-            id: this.#getId(),
-            type: shape,
-            state: {
-              lineType: options.lineType || 'solid', // 'none', 'solid'
-              lineWidth: options.lineWidth || 5,
-              lineColor: options.lineColor || '#000',
-              fill: options.fill,
-              centerX: this.#x,
-              centerY: this.#y,
-              width: 0,
-              height: 0,
-              rotate: 0,
-            },
-          });
-        }
-        const state = this.#history.at(-1).state;
-        state.width += dx * 2;
-        state.height += dy * 2;
-        window.requestAnimationFrame(() => this.#repaint());
-        this.#dispatch('onpaint', { type: shape, dx, dy });
-      }
-    };
-    const onMouseUp = () => {
-      this.#painting = false;
-      if (!this.#shouldAppendHistory) {
-        // It is false if and only if mousemove has been triggered, we can conclude:
-        // 1. #undos is non-empty.
-        // 2. The last action is editable, i.e. it is a geometry.
-        // 3. The drawing has been finished, it's time to show the bounding box.
-        const action = this.#history.at(-1);
-        this.#showBoundingBox(action.state);
-        this.#dispatch('onpaintend', deepClone(action));
-      } else {
-        // It is true if and only if mousemove hasn't been triggered, i.e. mouseclick.
-        this.#hideBoundingBox();
-      }
-    };
-    const onMouseLeave = () => {
-      if (this.#painting) {
-        // After mouseup, the cursor will enter the bounding box which will trigger uncessary mouseleave.
-        this.#painting = false;
-        this.#dispatch('onpaintend', deepClone(this.#history.at(-1)));
-      }
-    };
-
-    this.#cleanUp();
-    this.#hideBoundingBox();
-    this.#ctx.canvas.addEventListener('mousedown', onMouseDown);
-    this.#ctx.canvas.addEventListener('mousemove', onMouseMove);
-    this.#ctx.canvas.addEventListener('mouseup', onMouseUp);
-    this.#ctx.canvas.addEventListener('mouseleave', onMouseLeave);
-    this.#cleanUp = () => {
-      this.#ctx.canvas.removeEventListener('mousedown', onMouseDown);
-      this.#ctx.canvas.removeEventListener('mousemove', onMouseMove);
-      this.#ctx.canvas.removeEventListener('mouseup', onMouseUp);
-      this.#ctx.canvas.removeEventListener('mouseleave', onMouseLeave);
-    };
-  }
-
-  #brush(type, options) {
-    const onMouseDown = (e) => {
-      e.preventDefault();
-      this.#x = e.offsetX;
-      this.#y = e.offsetY;
-      this.#painting = true;
-      this.#history.push({
-        id: this.#getId(),
-        type,
-        state: {
-          ...options,
-          trajectory: [{
-            pt: [this.#x, this.#y],
-            type: CONSTANT.POINT,
-          }],
-        }
-      });
-      window.requestAnimationFrame(() => this.#repaint());
-      this.#dispatch('onpaintstart', { type, x: this.#x, y: this.#y });
-    };
-    const onMouseMove = ({ offsetX: x2, offsetY: y2 }) => {
-      if (this.#painting) {
-        const trajectory = this.#history.at(-1).state.trajectory;
-        const [x1, y1] = last(trajectory).pt;
-        const dist = distance(x1, y1, x2, y2);
-        if (dist < options.size * 0.35) {
-          // If two points are closed enough, connect by a point.
-          trajectory.push({
-            pt: [x2, y2],
-            type: CONSTANT.POINT,
-          });
-        } else if (dist > options.size / Math.sqrt(2)) {
-          // If two points are far enough, connect by a straight line.
-          trajectory.push({
-            pt: [x2, y2],
-            type: CONSTANT.LINE,
-          });
-        }
-        window.requestAnimationFrame(() => this.#repaint());
-        this.#dispatch('onpaint', { type, x: x2, y: y2 });
-      }
-    };
-    const onMouseUp = () => {
-      this.#painting = false;
-      this.#dispatch('onpaintend', deepClone(this.#history.at(-1)));
-    };
-    const onMouseLeave = () => {
-      if (this.#painting) {
-        this.#painting = false;
-        this.#dispatch('onpaintend', deepClone(this.#history.at(-1)));
-      }
-    }
-
-    this.#cleanUp();
-    this.#hideBoundingBox();
-    this.#ctx.canvas.addEventListener('mousedown', onMouseDown);
-    this.#ctx.canvas.addEventListener('mousemove', onMouseMove);
-    this.#ctx.canvas.addEventListener('mouseup', onMouseUp);
-    this.#ctx.canvas.addEventListener('mouseleave', onMouseLeave);
-    this.#cleanUp = () => {
-      this.#ctx.canvas.removeEventListener('mousedown', onMouseDown);
-      this.#ctx.canvas.removeEventListener('mousemove', onMouseMove);
-      this.#ctx.canvas.removeEventListener('mouseup', onMouseUp);
-      this.#ctx.canvas.removeEventListener('mouseleave', onMouseLeave);
-    };
-  }
-
   #repaint() {
-    this.#ctx.clearRect(0, 0, this.#ctx.canvas.width, this.#ctx.canvas.height);
-    if (this.#activeCheckpoint >= 0) {
-      this.#ctx.drawImage(this.#checkpoints[this.#activeCheckpoint], 0, 0);
-    } else {
-      this.#drawBackground();
+    // clear the canvas
+    this.#ctx.clearRect(0, 0, this.#width, this.#height);
+
+    // paint the checkpoint
+    const checkpoint = this.#checkpoints[this.#activeCheckpoint];
+    if (checkpoint) {
+      this.#ctx.drawImage(checkpoint, 0, 0);
     }
+
+    // paint the action history
     this.#history.forEach(({ id, type, state }, i) => {
       const nextAction = this.#history.at(i + 1);
       if (nextAction && id === nextAction.id) {
         // Skip the current action, as the next action resizes/drags/rotates the current geometry.
         return;
       }
-      if (type === CONSTANT.MARKER) {
-        this.#drawMarker(state);
-      } else if (type === CONSTANT.ERASER) {
-        this.#drawEraser(state);
-      } else if (type === CONSTANT.ELLIPSE) {
-        this.#drawEllipse(state);
-      } else if (type === CONSTANT.RECTANGLE) {
-        this.#drawRectangle(state);
-      } else if (type === CONSTANT.TRIANGLE) {
-        this.#drawTriangle(state);
-      } else if (type === CONSTANT.LINE) {
-        this.#drawLine(state);
-      } else if (type === CONSTANT.IMAGE) {
-        this.#drawImage(state);
-      }
+      this.#painters[type](this.#ctx, state);
     });
-  }
-
-  #drawEllipse(state) {
-    if (this.#resizing || this.#rotating || this.#dragging) {
-      this.#showBoundingBox(state);
-    }
-    drawGeometry(this.#ctx, CONSTANT.ELLIPSE, state);
-  }
-
-  #drawRectangle(state) {
-    if (this.#resizing || this.#rotating || this.#dragging) {
-      this.#showBoundingBox(state);
-    }
-    drawGeometry(this.#ctx, CONSTANT.RECTANGLE, state);
-  }
-
-  #drawTriangle(state) {
-    if (this.#resizing || this.#rotating || this.#dragging) {
-      this.#showBoundingBox(state);
-    }
-    drawGeometry(this.#ctx, CONSTANT.TRIANGLE, state);
-  }
-
-  #drawLine({ startX: x1, startY: y1, endX: x2, endY: y2, lineColor, lineWidth }) {
-    this.#ctx.save();
-    this.#ctx.beginPath();
-    this.#ctx.moveTo(x1, y1);
-    this.#ctx.lineTo(x2, y2);
-    this.#ctx.lineWidth = lineWidth;
-    this.#ctx.strokeStyle = lineColor;
-    this.#ctx.stroke();
-    this.#ctx.restore();
-  }
-
-  #drawMarker({ color, trajectory, size }) {
-    this.#ctx.save();
-    this.#ctx.fillStyle = color;
-    this.#ctx.strokeStyle = color;
-    this.#ctx.lineWidth = size;
-    this.#ctx.lineCap = 'round';
-    trajectory.forEach(({ pt, type }, i) => {
-      const [x, y] = pt;
-      if (type === CONSTANT.POINT) {
-        this.#ctx.beginPath();
-        this.#ctx.arc(x, y, size * 0.5, 0, Math.PI * 2);
-        this.#ctx.fill();
-      } else if (type === CONSTANT.LINE) {
-        const [x1, y1] = trajectory[i - 1].pt;
-        this.#ctx.beginPath();
-        this.#ctx.moveTo(x1, y1);
-        this.#ctx.lineTo(x, y);
-        this.#ctx.stroke();
-      }
-    });
-    this.#ctx.restore();
-  }
-
-  #drawEraser({ trajectory, size }) {
-    this.#ctx.save();
-    this.#ctx.globalCompositeOperation = 'destination-out';
-    this.#ctx.lineWidth = size;
-    this.#ctx.lineCap = 'round';
-    trajectory.forEach(({ pt, type }, i) => {
-      const [x, y] = pt;
-      if (type === CONSTANT.POINT) {
-        this.#ctx.beginPath();
-        this.#ctx.arc(x, y, size * 0.5, 0, Math.PI * 2);
-        this.#ctx.fill();
-      } else if (type === CONSTANT.LINE) {
-        const [x1, y1] = trajectory[i - 1].pt;
-        this.#ctx.beginPath();
-        this.#ctx.moveTo(x1, y1);
-        this.#ctx.lineTo(x, y);
-        this.#ctx.stroke();
-      }
-    });
-    this.#ctx.restore();
-  }
-
-  #drawImage({ source, centerX, centerY, width, height, rotate }) {
-    if (this.#resizing || this.#rotating || this.#dragging) {
-      this.#showBoundingBox({ centerX, centerY, width, height, rotate });
-    }
-    this.#ctx.save();
-    this.#ctx.translate(centerX, centerY);
-    this.#ctx.rotate(rotate);
-    this.#ctx.drawImage(source, -width * 0.5, -height * 0.5, width, height);
-    this.#ctx.restore();
   }
 
   #showBoundingBox({ centerX: cx, centerY: cy, width: w, height: h, rotate: r }) {
-    w = Math.abs(w);
-    h = Math.abs(h);
+    const _w = Math.abs(w);
+    const _h = Math.abs(h);
 
-    // bounding box states
-    this.#bbox._centerX = cx;
-    this.#bbox._centerY = cy;
-    this.#bbox._width = w;
-    this.#bbox._height = h;
+    // minimize the number of reflow.
+    if (this.#bbox._w !== w || this.#bbox._h !== h) {
+      this.#bbox.style.width = _w + 'px';
+      this.#bbox.style.height = _h + 'px';
+    }
 
-    this.#bbox.style.width = w + 'px';
-    this.#bbox.style.height = h + 'px';
     this.#bbox.style.transform = `
-      translate(${cx - w * 0.5}px, ${cy - h * 0.5}px)
+      translate(${cx - _w * 0.5}px, ${cy - _h * 0.5}px)
       rotate(${r}rad)
     `;
+
+    // bounding box states
+    this.#bbox._cx = cx;
+    this.#bbox._cy = cy;
+    this.#bbox._w = w;
+    this.#bbox._h = h;
+    this.#bbox._r = r;
   }
 
   #hideBoundingBox() {
@@ -498,41 +456,44 @@ class Paint {
   }
 
   #initDOM() {
+    this.#background = this.#ctx.canvas.cloneNode();
+    this.#background.id = 'paint-background';
+
     const wrapper = createWrapper(this.#width, this.#height);
     const overlay = createOverlay();
     const {
       boundingBox: bbox,
-      resizeControllers,
-      dragController,
-    } = createBoundingBox(2, 10);
+      resizers,
+      dragger,
+    } = createBoundingBox();
 
     this.#bbox = bbox;
     this.#ctx.canvas.parentNode.replaceChild(wrapper, canvas);
     wrapper.appendChild(canvas);
+    wrapper.appendChild(this.#background)
     wrapper.appendChild(bbox);
     wrapper.appendChild(overlay);
 
-    resizeControllers.forEach((controller) => {
-      controller.addEventListener('mousedown', (e) => {
+    resizers.forEach((dot) => {
+      dot.addEventListener('mousedown', (e) => {
         e.preventDefault();
         e.stopPropagation();
         this.#resizing = true;
-        this.#resizeDirection = controller._direction;
+        this.#resizeDirection = dot._direction;
         this.#shouldAppendHistory = true;
-        const state = this.#history.at(-1).state;
-        this.#flipX = state.width < 0 ? -1 : 1;
-        this.#flipY = state.height < 0 ? -1 : 1;
-        overlay.style.zIndex = 1;
+        this.#flipX = bbox._w < 0 ? -1 : 1;
+        this.#flipY = bbox._h < 0 ? -1 : 1;
+        overlay.style.zIndex = 9999;
         this.#dispatch('onresizestart', { direction: this.#resizeDirection });
       });
     });
 
-    dragController.addEventListener('mousedown', (e) => {
+    dragger.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
       this.#dragging = true;
       this.#shouldAppendHistory = true;
-      overlay.style.zIndex = 1;
+      overlay.style.zIndex = 9999;
       this.#dispatch('ondragstart');
     });
 
@@ -541,9 +502,9 @@ class Paint {
       e.preventDefault();
       this.#rotating = true;
       this.#shouldAppendHistory = true;
-      this.#x = bbox._centerX - bbox._width * 0.5 + e.offsetX;
-      this.#y = bbox._centerY - bbox._height * 0.5 + e.offsetY;
-      overlay.style.zIndex = 1;
+      this.#x = bbox._cx - Math.abs(bbox._w) * 0.5 + e.offsetX;
+      this.#y = bbox._cy - Math.abs(bbox._h) * 0.5 + e.offsetY;
+      overlay.style.zIndex = 9999;
       this.#dispatch('onrotatestart');
     });
 
@@ -561,12 +522,10 @@ class Paint {
         });
       }
 
-      const {
-        offsetX: x,
-        offsetY: y,
-        movementX: dx,
-        movementY: dy,
-      } = e;
+      const x = e.offsetX;
+      const y = e.offsetY;
+      const dx = e.movementX;
+      const dy = e.movementY;
       const state = this.#history.at(-1).state;
 
       if (this.#dragging) {
@@ -574,59 +533,61 @@ class Paint {
         state.centerY += dy;
         overlay.style.cursor = 'move';
         this.#dispatch('ondrag', { dx, dy });
-      } else if (this.#resizing) {
-        switch (this.#resizeDirection) {
-          case CONSTANT.TOP:
-            state.centerY += dy * 0.5;
-            state.height -= dy * this.#flipY;
-            overlay.style.cursor = 'ns-resize';
-            break;
-          case CONSTANT.BOTTOM:
-            state.centerY += dy * 0.5;
-            state.height += dy * this.#flipY;
-            overlay.style.cursor = 'ns-resize';
-            break;
-          case CONSTANT.LEFT:
-            state.centerX += dx * 0.5;
-            state.width -= dx * this.#flipX;
-            overlay.style.cursor = 'ew-resize';
-            break;
-          case CONSTANT.RIGHT:
-            state.centerX += dx * 0.5;
-            state.width += dx * this.#flipX;
-            overlay.style.cursor = 'ew-resize';
-            break;
-          case CONSTANT.TOP_RIGHT:
-            state.centerX += dx * 0.5;
-            state.centerY += dy * 0.5;
-            state.width += dx * this.#flipX;
-            state.height -= dy * this.#flipY;
-            overlay.style.cursor = 'nesw-resize';
-            break;
-          case CONSTANT.BOTTOM_RIGHT:
-            state.centerX += dx * 0.5;
-            state.centerY += dy * 0.5;
-            state.width += dx * this.#flipX;
-            state.height += dy * this.#flipY;
-            overlay.style.cursor = 'nwse-resize';
-            break;
-          case CONSTANT.BOTTOM_LEFT:
-            state.centerX += dx * 0.5;
-            state.centerY += dy * 0.5;
-            state.width -= dx * this.#flipX;
-            state.height += dy * this.#flipY;
-            overlay.style.cursor = 'nesw-resize';
-            break;
-          case CONSTANT.TOP_LEFT:
-            state.centerX += dx * 0.5;
-            state.centerY += dy * 0.5;
-            state.width -= dx * this.#flipX;
-            state.height -= dy * this.#flipY;
-            overlay.style.cursor = 'nwse-resize';
-            break;
+      }
+      else if (this.#resizing) {
+        const d = this.#resizeDirection;
+
+        if (d === CONSTANT.TOP) {
+          state.centerY += dy * 0.5;
+          state.height -= dy * this.#flipY;
+          overlay.style.cursor = 'ns-resize';
         }
-        this.#dispatch('onresize', { direction: this.#resizeDirection, dx, dy });
-      } else if (this.#rotating) {
+        else if (d === CONSTANT.BOTTOM) {
+          state.centerY += dy * 0.5;
+          state.height += dy * this.#flipY;
+          overlay.style.cursor = 'ns-resize';
+        }
+        else if (d === CONSTANT.LEFT) {
+          state.centerX += dx * 0.5;
+          state.width -= dx * this.#flipX;
+          overlay.style.cursor = 'ew-resize';
+        }
+        else if (d === CONSTANT.RIGHT) {
+          state.centerX += dx * 0.5;
+          state.width += dx * this.#flipX;
+          overlay.style.cursor = 'ew-resize';
+        }
+        else if (d === CONSTANT.TOP_RIGHT) {
+          state.centerX += dx * 0.5;
+          state.centerY += dy * 0.5;
+          state.width += dx * this.#flipX;
+          state.height -= dy * this.#flipY;
+          overlay.style.cursor = 'nesw-resize';
+        }
+        else if (d === CONSTANT.BOTTOM_RIGHT) {
+          state.centerX += dx * 0.5;
+          state.centerY += dy * 0.5;
+          state.width += dx * this.#flipX;
+          state.height += dy * this.#flipY;
+          overlay.style.cursor = 'nwse-resize';
+        }
+        else if (d === CONSTANT.BOTTOM_LEFT) {
+          state.centerX += dx * 0.5;
+          state.centerY += dy * 0.5;
+          state.width -= dx * this.#flipX;
+          state.height += dy * this.#flipY;
+          overlay.style.cursor = 'nesw-resize';
+        }
+        else if (d === CONSTANT.TOP_LEFT) {
+          state.centerX += dx * 0.5;
+          state.centerY += dy * 0.5;
+          state.width -= dx * this.#flipX;
+          state.height -= dy * this.#flipY;
+          overlay.style.cursor = 'nwse-resize';
+        }
+        this.#dispatch('onresize', { direction: d, dx, dy });
+      }
+      else if (this.#rotating) {
         const cx = state.centerX;
         const cy = state.centerY;
         const baseAngle = atan(cx, cy, this.#x, this.#y); // angle of the starting position,
@@ -645,7 +606,7 @@ class Paint {
     ['mouseup', 'mouseleave'].forEach((event) => {
       overlay.addEventListener(event, (e) => {
         e.stopPropagation();
-        const action = this.#history.at(-1);
+        const action = deepClone(this.#history.at(-1));
         if (this.#dragging) {
           this.#dragging = false;
           this.#dispatch('ondragend', action);
@@ -667,56 +628,6 @@ class Paint {
 }
 
 const canvas = document.querySelector('#painting-board');
-canvas.addEventListener('paint:onpaintstart', ({ detail }) => {
-  if (detail.type === 'MARKER') {
-    canvas.style.cursor = 'cell'
-  }
-});
-canvas.addEventListener('paint:onpaint', ({detail}) => {
-  
-});
-canvas.addEventListener('paint:onpaintend', ({detail}) => {
-  if (detail.type === 'MARKER') {
-    canvas.style.cursor = 'default'
-  }
-});
-canvas.addEventListener('paint:onrotatestart', ({detail}) => {
-  console.log('rotate start: ', detail);
-});
-canvas.addEventListener('paint:onrotate', ({detail}) => {
-  console.log('rotating: ', detail);
-});
-canvas.addEventListener('paint:onrotateend', ({detail}) => {
-  console.log('rotate end: ', detail);
-});
-canvas.addEventListener('paint:onresizestart', ({detail}) => {
-  console.log('resize start: ', detail);
-});
-canvas.addEventListener('paint:onresize', ({detail}) => {
-  console.log('resizing: ', detail);
-});
-canvas.addEventListener('paint:onresizeend', ({detail}) => {
-  console.log('resize end: ', detail);
-});
-canvas.addEventListener('paint:ondragstart', ({detail}) => {
-  console.log('drag start: ', detail);
-});
-canvas.addEventListener('paint:ondrag', ({detail}) => {
-  console.log('dragging: ', detail);
-});
-canvas.addEventListener('paint:ondragend', ({detail}) => {
-  console.log('drag end: ', detail);
-});
-canvas.addEventListener('paint:onimageload', ({detail}) => {
-  console.log('image load: ', detail);
-});
-canvas.addEventListener('paint:oncheckpoint', ({detail}) => {
-  console.log('checkpoint: ', detail);
-});
-canvas.addEventListener('paint:oncheckpointload', ({detail}) => {
-  console.log('checkpoint load: ', detail);
-});
-
 const paint = new Paint(canvas, 1200, 1200);
 
 const image = document.querySelector('#image');
@@ -726,12 +637,14 @@ paint.background('image', image);
 
 document.querySelector('#redo-btn').addEventListener('click', () => paint.redo());
 document.querySelector('#undo-btn').addEventListener('click', () => paint.undo());
+document.querySelector('#clear-btn').addEventListener('click', () => paint.clear());
+document.querySelector('#zoom-btn').addEventListener('click', () => paint.zoom(2));
 document.querySelector('#checkpoint-btn').addEventListener('click', () => paint.checkpoint());
 document.querySelector('#load-checkpoint-btn-1').addEventListener('click', () => paint.loadCheckpoint(1));
 document.querySelector('#load-checkpoint-btn-2').addEventListener('click', () => paint.loadCheckpoint(2));
-document.querySelector('#ellipse-btn').addEventListener('click', () => paint.ellipse());
-document.querySelector('#rectangle-btn').addEventListener('click', () => paint.rectangle());
-document.querySelector('#triangle-btn').addEventListener('click', () => paint.triangle({ lineType: 'none', fill: 'skyblue'}));
+document.querySelector('#ellipse-btn').addEventListener('click', () => paint.ellipse(200, 200));
+document.querySelector('#rectangle-btn').addEventListener('click', () => paint.rectangle(300, 150));
+document.querySelector('#triangle-btn').addEventListener('click', () => paint.triangle(300*1.118, 300));
 document.querySelector('#marker-btn').addEventListener('click', () => paint.marker({ size : 20 }));
 document.querySelector('#eraser-btn').addEventListener('click', () => paint.eraser({ size: 20 }));
 document.querySelector('#line-btn').addEventListener('click', () => paint.line());
